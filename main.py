@@ -7,6 +7,8 @@ import argparse
 import sys
 import os
 import platform
+import threading
+import queue
 
 # Ensure the pyPOACamera module is available
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -339,7 +341,7 @@ class MarsCamera:
         self.streaming = False
         return True
     
-    def get_frame(self, timeout_ms=2000):
+    def get_frame(self, timeout_ms=500):
         """Get a frame from the camera"""
         if not self.connected or not self.streaming:
             return None
@@ -380,7 +382,7 @@ def main():
     parser.add_argument('--exposure', type=float, default=10.0, help='Exposure time (ms)')
     parser.add_argument('--gain', type=float, default=0, help='Gain value')
     parser.add_argument('--offset', type=int, default=10, help='Black level offset')
-    parser.add_argument('--bin', type=int, default=1, choices=[1, 2, 3, 4], help='Binning')
+    parser.add_argument('--bin', type=int, default=4, choices=[1, 2, 3, 4], help='Binning')
     parser.add_argument('--usb-limit', type=int, default=80, help='USB bandwidth limit (35-100%)')
     parser.add_argument('--cooler', type=int, default=-10, help='Cooler target temperature (C)')
     parser.add_argument('--save-dir', default='.', help='Directory for saving images')
@@ -427,8 +429,9 @@ def main():
         cv2.namedWindow('Mars Camera', cv2.WINDOW_NORMAL)
         
         # Setup image processing parameters
-        display_mode = 2  # 0=Auto, 1=Full range, 2=Native, 3=Bit shift
+        display_mode = 1  # 0=Auto, 1=Full range, 2=Native, 3=Bit shift
         contrast_mode = 0  # 0=Normal, 1=Enhanced, 2=High
+        grid_mode = 0  # 0=None, 1=Rule of Thirds, 2=Golden Ratio, 3=Fine Grid
         rms_values = []
         max_rms = 20
         
@@ -456,20 +459,68 @@ def main():
         print("b / B - Decrease/increase binning")
         print("d   - Cycle through display modes")
         print("c   - Cycle through contrast modes")
+        print("g   - Cycle through grid overlay modes")
         print("r   - Reset RMS plot scaling")
         
-        # Main loop
-        while True:
-            # Get frame
-            frame = camera.get_frame(timeout_ms=1000)
-            if frame is None:
+        # Setup frame queue for multithreading
+        frame_queue = queue.Queue(maxsize=5)  # Limit queue size to prevent memory issues
+        processing_fps = 0
+        acquisition_fps = 0
+        running = True
+        
+        # Frame acquisition thread function
+        def frame_acquisition_thread():
+            nonlocal acquisition_fps, running
+            acq_frame_count = 0
+            acq_start_time = time.time()
+            
+            while running:
+                # Get frame
+                frame = camera.get_frame(timeout_ms=500)  # Reduced timeout for faster response
+                if frame is not None:
+                    # If queue is full, remove oldest frame to make room
+                    if frame_queue.full():
+                        try:
+                            frame_queue.get_nowait()
+                        except queue.Empty:
+                            pass
+                    
+                    # Add new frame to queue
+                    try:
+                        frame_queue.put_nowait(frame)
+                    except queue.Full:
+                        pass
+                    
+                    # Calculate acquisition FPS
+                    acq_frame_count += 1
+                    if acq_frame_count >= 10:
+                        acq_end_time = time.time()
+                        acquisition_fps = acq_frame_count / (acq_end_time - acq_start_time)
+                        acq_frame_count = 0
+                        acq_start_time = time.time()
+        
+        # Start frame acquisition thread
+        acq_thread = threading.Thread(target=frame_acquisition_thread, daemon=True)
+        acq_thread.start()
+        
+        # Main processing and display loop
+        while running:
+            # Get frame from queue
+            try:
+                frame = frame_queue.get(timeout=0.5)
+            except queue.Empty:
+                # No frame available, check for key presses and continue
+                k = cv2.waitKey(1)
+                if k == 27:  # ESC key
+                    running = False
+                    break
                 continue
             
-            # Calculate FPS
+            # Calculate processing FPS
             frame_count += 1
             if frame_count >= 10:
                 end_time = time.time()
-                fps = frame_count / (end_time - start_time)
+                processing_fps = frame_count / (end_time - start_time)
                 frame_count = 0
                 start_time = time.time()
             
@@ -527,9 +578,9 @@ def main():
                 contrast_str = "High contrast"
             else:  # Normal contrast
                 contrast_str = "Normal contrast"
-            
+
             # Apply Laplacian filter for focus measurement
-            laplacian = cv2.Laplacian(gray, cv2.CV_64F)
+            laplacian = cv2.Laplacian(gray, cv2.CV_64F, ksize=5)
             
             # Calculate RMS value (focus metric)
             rms = np.sqrt(np.mean(np.square(laplacian)))
@@ -546,21 +597,59 @@ def main():
             # Create display image
             display_frame = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
             
+            # Add grid overlay if enabled
+            h, w = display_frame.shape[:2]
+            if grid_mode == 1:  # Rule of Thirds
+                # Vertical lines
+                x1, x2 = int(w/3), int(2*w/3)
+                cv2.line(display_frame, (x1, 0), (x1, h), (0, 140, 255), 1)
+                cv2.line(display_frame, (x2, 0), (x2, h), (0, 140, 255), 1)
+                # Horizontal lines
+                y1, y2 = int(h/3), int(2*h/3)
+                cv2.line(display_frame, (0, y1), (w, y1), (0, 140, 255), 1)
+                cv2.line(display_frame, (0, y2), (w, y2), (0, 140, 255), 1)
+            elif grid_mode == 2:  # Golden Ratio (Phi ≈ 1.618)
+                # Vertical lines
+                phi = 1.618
+                x1 = int(w / (1 + phi))
+                x2 = int(w - x1)
+                cv2.line(display_frame, (x1, 0), (x1, h), (0, 140, 255), 1)
+                cv2.line(display_frame, (x2, 0), (x2, h), (0, 140, 255), 1)
+                # Horizontal lines
+                y1 = int(h / (1 + phi))
+                y2 = int(h - y1)
+                cv2.line(display_frame, (0, y1), (w, y1), (0, 140, 255), 1)
+                cv2.line(display_frame, (0, y2), (w, y2), (0, 140, 255), 1)
+            elif grid_mode == 3:  # Fine Grid
+                # Draw a 5x5 grid
+                for i in range(1, 5):
+                    # Vertical lines
+                    x = int(i * w / 5)
+                    cv2.line(display_frame, (x, 0), (x, h), (0, 140, 255), 1)
+                    # Horizontal lines
+                    y = int(i * h / 5)
+                    cv2.line(display_frame, (0, y), (w, y), (0, 140, 255), 1)
+            
             # Add info overlay
             percent_of_max = min(100, int(100.0 * dynamic_range / max_theoretical_val))
             
-            cv2.putText(display_frame, f"FPS: {fps:.1f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            cv2.putText(display_frame, f"RMS: {rms:.2f}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            cv2.putText(display_frame, f"Exp: {current_exposure:.1f}ms", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            cv2.putText(display_frame, f"Gain: {current_gain:.1f}", (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            cv2.putText(display_frame, f"Bin: {current_bin}x{current_bin}", (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            cv2.putText(display_frame, f"{scaling_method}, {contrast_str}", (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            cv2.putText(display_frame, f"Range: {frame_min}-{frame_max} ({percent_of_max}%)", (10, 210), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(display_frame, f"Display FPS: {processing_fps:.1f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(display_frame, f"Camera FPS: {acquisition_fps:.1f}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(display_frame, f"RMS: {rms:.2f}", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(display_frame, f"Exp: {current_exposure:.1f}ms", (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(display_frame, f"Gain: {current_gain:.1f}", (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(display_frame, f"Bin: {current_bin}x{current_bin}", (10, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            # Get grid mode string
+            grid_modes = ["No Grid", "Rule of Thirds", "Golden Ratio", "Fine Grid"]
+            grid_str = grid_modes[grid_mode]
+            
+            cv2.putText(display_frame, f"{scaling_method}, {contrast_str}, {grid_str}", (10, 210), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(display_frame, f"Range: {frame_min}-{frame_max} ({percent_of_max}%)", (10, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             
             if camera.has_cooler():
                 current_temp = camera.get_temp()
                 if current_temp is not None:
-                    cv2.putText(display_frame, f"Temp: {current_temp:.1f}°C", (10, 240), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                    cv2.putText(display_frame, f"Temp: {current_temp:.1f}°C", (10, 270), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             
             # Draw RMS plot
             h, w = display_frame.shape[:2]
@@ -597,6 +686,7 @@ def main():
             # Check for key press
             k = cv2.waitKey(1)
             if k == 27:  # ESC key
+                running = False
                 break
             elif k == ord('s'):  # Save image
                 # Create save directory if it doesn't exist
@@ -636,6 +726,7 @@ def main():
                 print("b / B - Decrease/increase binning")
                 print("d   - Cycle through display modes (Auto/Dynamic Range/Native/Bit-shift)")
                 print("c   - Cycle through contrast modes (Normal/Enhanced/High)")
+                print("g   - Cycle through grid modes (None/Rule of Thirds/Golden Ratio/Fine Grid)")
                 print("r   - Reset RMS plot scaling")
             elif k == ord('d'):  # Change display mode
                 display_mode = (display_mode + 1) % 4
@@ -645,6 +736,10 @@ def main():
                 contrast_mode = (contrast_mode + 1) % 3
                 contrast_modes = ["Normal", "Enhanced", "High contrast"]
                 print(f"Contrast mode changed to: {contrast_modes[contrast_mode]}")
+            elif k == ord('g'):  # Change grid mode
+                grid_mode = (grid_mode + 1) % 4
+                grid_modes = ["None", "Rule of Thirds", "Golden Ratio", "Fine Grid"]
+                print(f"Grid mode changed to: {grid_modes[grid_mode]}")
             elif k == ord('r'):  # Reset RMS plot scaling
                 max_rms = 20
                 rms_values = []
@@ -693,6 +788,13 @@ def main():
         import traceback
         traceback.print_exc()
     finally:
+        # Signal threads to stop
+        running = False
+        
+        # Wait for acquisition thread to finish
+        if 'acq_thread' in locals() and acq_thread.is_alive():
+            acq_thread.join(timeout=1.0)
+            
         # Clean up
         if camera is not None:
             if camera.streaming:
