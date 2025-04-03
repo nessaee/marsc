@@ -4,6 +4,21 @@ import cv2
 import numpy as np
 import logging
 import time
+import threading
+import matplotlib
+# Try to use a backend that works well with OpenCV, but fall back gracefully
+try:
+    # First try TkAgg as it's widely available
+    matplotlib.use('TkAgg')
+except ImportError:
+    try:
+        # Then try Qt5Agg
+        matplotlib.use('Qt5Agg')
+    except ImportError:
+        # Finally fall back to the default backend
+        pass
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
 
 # Configure logging
 logger = logging.getLogger('marsc.image_processor')
@@ -47,6 +62,15 @@ class ImageProcessor:
         self.raw_mode = self.RAW_MODE_BAYER  # Default to Bayer pattern (color sensor)
         self.rms_values = []
         self.max_rms = 20
+        self.show_rms_plot = False  # Flag to control RMS plot visibility
+        self.rms_plot_initialized = False  # Track if the plot has been initialized
+        self.rms_fig = None  # Figure for the RMS plot
+        self.rms_ax = None   # Axis for the RMS plot
+        self.rms_line = None  # Line object for the RMS plot
+        self.rms_animation = None  # Animation object for real-time updates
+        self.rms_x_data = []  # X-axis data (frame numbers)
+        self.frame_count = 0  # Counter for frames processed
+        
         logger.debug(f"Initial settings: display_mode={self.get_display_mode_name()}, "
                     f"contrast_mode={self.get_contrast_mode_name()}, "
                     f"grid_mode={self.get_grid_mode_name()}, "
@@ -77,6 +101,116 @@ class ImageProcessor:
         """Get the name of the current raw mode"""
         raw_modes = ["Bayer Pattern", "Monochrome"]
         return raw_modes[self.raw_mode]
+        
+    def initialize_rms_plot(self):
+        """Initialize the RMS plot window"""
+        if self.rms_plot_initialized:
+            return
+            
+        logger.info("Initializing RMS plot window")
+        
+        # Start the plot in a separate thread to avoid blocking the main UI
+        self.plot_thread = threading.Thread(target=self._create_plot_window)
+        self.plot_thread.daemon = True  # Thread will exit when main program exits
+        self.plot_thread.start()
+        
+        # Mark as initialized
+        self.rms_plot_initialized = True
+        
+    def _create_plot_window(self):
+        """Create the plot window in a separate thread"""
+        try:
+            # Create a new figure with a unique number to ensure it's a separate window
+            self.rms_fig = plt.figure(figsize=(8, 4), num="RMS Plot")
+            self.rms_ax = self.rms_fig.add_subplot(111)
+            
+            # Set window title if the backend supports it
+            try:
+                self.rms_fig.canvas.manager.set_window_title('Focus Measurement (RMS) Plot')
+            except (AttributeError, NotImplementedError):
+                # Some backends don't support setting window title
+                pass
+            
+            # Initialize with empty data
+            self.rms_line, = self.rms_ax.plot([], [], 'b-', linewidth=2)
+            
+            # Configure the plot
+            self.rms_ax.set_title('Real-time Focus Measurement')
+            self.rms_ax.set_xlabel('Frame')
+            self.rms_ax.set_ylabel('RMS Value')
+            self.rms_ax.grid(True)
+            
+            # Set initial y-axis limits
+            self.rms_ax.set_ylim(0, max(20, self.max_rms * 1.2))
+            
+            # Create animation that updates every 100ms
+            # Set save_count to 100 to limit the number of cached frames
+            self.rms_animation = FuncAnimation(
+                self.rms_fig, self._update_rms_plot, interval=100, blit=True, save_count=100)
+            
+            # Show the plot window - this will block in this thread
+            plt.tight_layout()
+            plt.show()
+        except Exception as e:
+            logger.error(f"Failed to create RMS plot window: {e}")
+            self.rms_plot_initialized = False
+        
+    def _update_rms_plot(self, frame):
+        """Update the RMS plot with new data"""
+        try:
+            if not self.rms_values or not hasattr(self, 'rms_line') or self.rms_line is None:
+                return [self.rms_line] if hasattr(self, 'rms_line') and self.rms_line is not None else []
+                
+            # Update the line data
+            self.rms_line.set_data(self.rms_x_data, self.rms_values)
+            
+            # Adjust x-axis limits to show all data
+            x_min = max(0, self.frame_count - 100)
+            self.rms_ax.set_xlim(x_min, self.frame_count + 5)
+            
+            # Adjust y-axis if needed
+            current_max = max(self.rms_values) if self.rms_values else 20
+            if current_max > self.rms_ax.get_ylim()[1] * 0.8:
+                self.rms_ax.set_ylim(0, current_max * 1.2)
+            
+            return [self.rms_line]
+        except Exception as e:
+            logger.error(f"Error updating RMS plot: {e}")
+            return []
+        
+    def toggle_rms_plot(self):
+        """Toggle the RMS plot window on/off"""
+        try:
+            self.show_rms_plot = not self.show_rms_plot
+            
+            if self.show_rms_plot:
+                # Initialize the plot if needed
+                if not self.rms_plot_initialized:
+                    self.initialize_rms_plot()
+                    logger.info("RMS plot window initialized")
+                # The plot is shown automatically when initialized
+            else:
+                logger.info("RMS plot updates paused")
+                # We can't hide the plot once it's shown due to threading,
+                # but we can stop updating it
+                    
+            return self.show_rms_plot
+        except Exception as e:
+            logger.error(f"Error toggling RMS plot: {e}")
+            return False
+        
+    def reset_rms_plot_scale(self):
+        """Reset the RMS plot scale"""
+        try:
+            if self.rms_plot_initialized and hasattr(self, 'rms_ax') and self.rms_ax is not None:
+                self.max_rms = max(20, max(self.rms_values) if self.rms_values else 20)
+                self.rms_ax.set_ylim(0, self.max_rms * 1.2)
+                logger.info(f"RMS plot scale reset to max value: {self.max_rms:.2f}")
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"Error resetting RMS plot scale: {e}")
+            return False
         
     def set_raw_mode(self, is_monochrome):
         """Set the raw mode based on whether the sensor is monochrome"""
@@ -451,6 +585,10 @@ class ImageProcessor:
         self.rms_values.append(rms)
         logger.debug(f"Focus measurement: RMS={rms:.3f}")
         
+        # Update frame counter for RMS plot
+        self.frame_count += 1
+        self.rms_x_data.append(self.frame_count)
+        
         # Simple max value adjustment
         if rms > self.max_rms:
             self.max_rms = rms * 1.2
@@ -458,6 +596,12 @@ class ImageProcessor:
         # Keep only the last 100 values for display
         if len(self.rms_values) > 100:
             self.rms_values.pop(0)
+            self.rms_x_data.pop(0)
+            
+        # Update RMS plot if it's visible
+        if self.show_rms_plot and self.rms_plot_initialized:
+            # The actual update happens in the animation loop
+            pass
         
         # Choose between color and grayscale display based on user preference
         logger.debug(f"Preparing display frame with color mode: {self.get_color_mode_name()}")

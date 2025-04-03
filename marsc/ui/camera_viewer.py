@@ -85,6 +85,7 @@ class CameraViewer:
         print("c   - Cycle through contrast modes (Normal/Enhanced/High)")
         print("g   - Cycle through grid modes (None/Rule of Thirds/Golden Ratio/Fine Grid)")
         print("r   - Reset RMS plot scaling")
+        print("p   - Toggle real-time RMS plot window")
         print("l   - Toggle Laplacian filter view")
         
     def start(self, initial_settings=None):
@@ -268,8 +269,13 @@ class CameraViewer:
                 grid_name = self.processor.cycle_grid_mode()
                 print(f"Grid mode changed to: {grid_name}")
             elif k == ord('r'):  # Reset RMS plot scaling
-                self.processor.reset_rms_plot()
-                print("RMS plot scaling reset")
+                if self.processor.reset_rms_plot_scale():
+                    print("RMS plot scaling reset")
+                else:
+                    print("RMS plot not active")
+            elif k == ord('p'):  # Toggle RMS plot
+                is_visible = self.processor.toggle_rms_plot()
+                print(f"RMS plot {'enabled' if is_visible else 'disabled'}")
             elif k == ord('+') or k == ord('='):  # Increase exposure
                 self.current_exposure = min(5000, self.current_exposure * 1.2)
                 self.camera.set_exposure(self.current_exposure)
