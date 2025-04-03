@@ -1,2 +1,4 @@
 playerone_sdk
 *.pyc
+*.png
+*.log
