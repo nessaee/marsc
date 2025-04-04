@@ -76,6 +76,14 @@ class CameraViewer:
         # Create button images and cache
         self.button_cache = {}
         
+        # Track position of controls section for button placement
+        self.controls_section_y = 180  # Default value, will be updated in _update_control_panel
+        
+        # Tab interface properties
+        self.active_tab = 0  # 0 = Parameters tab, 1 = Controls tab
+        self.tab_height = 40
+        self.tab_names = ["Parameters", "Controls"]
+        
         # Set up mouse callbacks for button interaction
         cv2.setMouseCallback(self.window_name, self._mouse_callback)
         cv2.setMouseCallback(self.control_panel_name, self._control_mouse_callback)
@@ -91,7 +99,7 @@ class CameraViewer:
             # This is a simple approach - works on Linux with X11
             try:
                 import subprocess
-                output = subprocess.check_output('xrandr | grep "\*" | cut -d" " -f4', shell=True).decode().strip()
+                output = subprocess.check_output(r'xrandr | grep "*" | cut -d" " -f4', shell=True).decode().strip()
                 if 'x' in output:
                     width, height = output.split('x')
                     self.screen_width = int(width)
@@ -127,13 +135,23 @@ class CameraViewer:
         self.control_mouse_y = y
 
         if event == cv2.EVENT_LBUTTONDOWN:
-            # Check if any control panel button was clicked
-            for button in self.control_buttons:
-                if self._is_point_in_rect(x, y, button['rect']):
-                    # Call the button's action function
-                    if button['action'] is not None:
-                        button['action']()
+            # Check if a tab was clicked
+            tab_width = self.control_panel_width / len(self.tab_names)
+            for i, tab_name in enumerate(self.tab_names):
+                # Create tab rectangle in the format expected by _is_point_in_rect (x, y, width, height)
+                tab_rect = (int(i * tab_width), 0, int(tab_width), self.tab_height)
+                if self._is_point_in_rect(x, y, tab_rect):
+                    self.active_tab = i
                     break
+                
+            # Check if any control panel button was clicked (only if in Controls tab)
+            if self.active_tab == 1:  # Controls tab
+                for button in self.control_buttons:
+                    if self._is_point_in_rect(x, y, button['rect']):
+                        # Call the button's action function
+                        if button['action'] is not None:
+                            button['action']()
+                        break
 
     def _is_point_in_rect(self, x, y, rect):
         """Check if point (x,y) is inside rectangle (x, y, width, height)"""
@@ -221,6 +239,18 @@ class CameraViewer:
         self.current_exposure = exp_ms
         self.camera.set_exposure(exp_ms)
         
+    def _draw_trackbar_labels(self, control_panel):
+        """Draw custom labels for trackbars to improve display"""
+        # Draw exposure value properly formatted
+        trackbar_y = 640  # Position where the exposure trackbar is located
+        cv2.putText(control_panel, f"Exposure (ms): {self.current_exposure:.2f}", 
+                   (20, trackbar_y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
+        
+        # Draw gain value properly formatted
+        gain_y = 665  # Position where the gain trackbar is located
+        cv2.putText(control_panel, f"Gain: {self.current_gain:.0f}", 
+                   (20, gain_y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
+        
     def _gain_callback(self, value):
         # Trackbar returns 0-100 directly for gain
         self.current_gain = value
@@ -253,8 +283,8 @@ class CameraViewer:
         # Button dimensions
         button_height = 30
         button_width = self.control_panel_width - 40
-        button_spacing = 25  # Increased vertical spacing
-        start_y = 180  # Start below trackbars with more space
+        button_spacing = 20  # Adjusted for better fit
+        start_y = self.controls_section_y + 20  # Start below the controls section header
         start_x = 20
         
         # Create buttons with actions in sections
@@ -270,24 +300,20 @@ class CameraViewer:
                           action=self._toggle_laplacian, active=self.show_laplacian, 
                           tooltip="Show/hide Laplacian edge detection view", panel="control")
         
-        self._create_button("Display Mode", start_x, display_y + (button_height + button_spacing), 
-                          button_width, button_height, action=self._cycle_display_mode, 
-                          tooltip="Change image display mode", panel="control")
+        # Removed Display Mode button
         
-        self._create_button("Contrast Mode", start_x, display_y + 2*(button_height + button_spacing), 
+        self._create_button("Contrast Mode", start_x, display_y + (button_height + button_spacing), 
                           button_width, button_height, action=self._cycle_contrast_mode,
                           tooltip="Change contrast enhancement mode", panel="control")
         
-        self._create_button("Grid Mode", start_x, display_y + 3*(button_height + button_spacing), 
-                          button_width, button_height, action=self._cycle_grid_mode,
-                          tooltip="Change grid overlay mode", panel="control")
+        # Removed Grid Mode button
         
-        self._create_button("Color Mode", start_x, display_y + 4*(button_height + button_spacing), 
+        self._create_button("Color Mode", start_x, display_y + 2*(button_height + button_spacing), 
                           button_width, button_height, action=self._toggle_color_mode,
                           tooltip="Toggle between color and grayscale", panel="control")
         
         # Focus measurement section
-        focus_y = display_y + 5*(button_height + button_spacing) + 20
+        focus_y = display_y + 3*(button_height + button_spacing) + 20
         
         self._create_button("RMS Plot", start_x, focus_y, button_width, button_height, 
                           action=self._toggle_rms_plot, active=self.processor.show_rms_plot, 
@@ -595,26 +621,164 @@ class CameraViewer:
         # Create control panel image
         control_panel = np.zeros((700, self.control_panel_width, 3), dtype=np.uint8)
         control_panel[:] = self.PANEL_COLOR
+        
+        # Draw custom labels for trackbars to improve display
+        self._draw_trackbar_labels(control_panel)
 
         # Add title
         cv2.putText(control_panel, "Mars Camera", (20, 30), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 140, 255), 2, cv2.LINE_AA)
         
-        # Control panel simplified - exposure scale and focus measurement moved to main window
-        # Just show the controls section
-        section_y = 80
+        # Draw tabs
+        tab_width = self.control_panel_width / len(self.tab_names)
+        for i, tab_name in enumerate(self.tab_names):
+            # Draw tab background (highlight active tab)
+            tab_color = (70, 70, 80) if i != self.active_tab else (0, 140, 255)
+            cv2.rectangle(control_panel, 
+                         (int(i * tab_width), 0), 
+                         (int((i+1) * tab_width), self.tab_height), 
+                         tab_color, -1)
+            
+            # Draw tab border
+            cv2.rectangle(control_panel, 
+                         (int(i * tab_width), 0), 
+                         (int((i+1) * tab_width), self.tab_height), 
+                         (100, 100, 100), 1)
+            
+            # Draw tab text
+            text_size = cv2.getTextSize(tab_name, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1)[0]
+            text_x = int(i * tab_width + (tab_width - text_size[0]) / 2)
+            text_y = int(self.tab_height / 2 + text_size[1] / 2)
+            cv2.putText(control_panel, tab_name, (text_x, text_y), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
         
-        # Controls section header
-        cv2.putText(control_panel, "Controls", (20, section_y - 10), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 140, 255), 1, cv2.LINE_AA)
+        # Content area starts below tabs
+        content_y = self.tab_height + 10
         
-        # Draw a separator line
-        cv2.line(control_panel, (20, section_y), 
-                (self.control_panel_width - 20, section_y), (100, 100, 100), 1)
+        # Only show the content for the active tab
+        if self.active_tab == 0:  # Parameters tab
+            # Add camera parameters section at the top
+            params_section_y = self.tab_height + 50
+            
+            # Camera parameters section header
+            cv2.putText(control_panel, "Camera Parameters", (20, params_section_y - 10), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 140, 255), 1, cv2.LINE_AA)
+            
+            # Draw a separator line
+            cv2.line(control_panel, (20, params_section_y), 
+                    (self.control_panel_width - 20, params_section_y), (100, 100, 100), 1)
+            
+            # Display camera parameters with highlight
+            params_y = params_section_y + 20
+            line_height = 20
+            
+            # Display exposure, gain, FPS, and temperature if available
+            cv2.putText(control_panel, f"Exposure: {camera_info['exposure']:.2f} ms", (25, params_y), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
+            params_y += line_height
+            
+            cv2.putText(control_panel, f"Gain: {camera_info['gain']:.1f}", (25, params_y), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
+            params_y += line_height
+            
+            cv2.putText(control_panel, f"FPS: {fps_info['display_fps']:.1f}", (25, params_y), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
+            params_y += line_height
+            
+            if 'temperature' in camera_info and camera_info['temperature'] is not None:
+                cv2.putText(control_panel, f"Temp: {camera_info['temperature']:.1f}°C", (25, params_y), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
+                params_y += line_height
+            
+            # Add focus measurement section after camera parameters
+            focus_section_y = params_y + 15
+            
+            # Focus measurement section header
+            cv2.putText(control_panel, "Focus Measurement", (20, focus_section_y - 10), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 140, 255), 1, cv2.LINE_AA)
+            
+            # Draw a separator line
+            cv2.line(control_panel, (20, focus_section_y), 
+                    (self.control_panel_width - 20, focus_section_y), (100, 100, 100), 1)
+            
+            # Display current focus score with highlight
+            cv2.putText(control_panel, f"Current: {camera_info['rms']:.2f}", (25, focus_section_y + 20), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (50, 200, 50), 1, cv2.LINE_AA)
+            
+            # Draw RMS plot in control panel - adjusted height to prevent overlap
+            plot_y = focus_section_y + 30
+            plot_h = 80  # Adjusted height to prevent overlap
+            plot_w = self.control_panel_width - 40
+            plot_x = 20
 
-        # Draw buttons
-        for button in self.control_buttons:
-            self._draw_button(control_panel, button, is_control_panel=True)
+            # Draw plot background with better contrast
+            cv2.rectangle(control_panel, (plot_x, plot_y), (plot_x + plot_w, plot_y + plot_h), (25, 25, 25), -1)
+            cv2.rectangle(control_panel, (plot_x, plot_y), (plot_x + plot_w, plot_y + plot_h), (80, 80, 80), 1)
+
+            # Draw RMS trend if we have values
+            if self.processor.rms_values and len(self.processor.rms_values) > 1:
+                # Draw grid lines for better readability
+                # Horizontal grid lines
+                for i in range(1, 4):  # Draw 3 horizontal grid lines
+                    grid_y = plot_y + int(i * plot_h / 4)
+                    cv2.line(control_panel, (plot_x, grid_y), (plot_x + plot_w, grid_y),
+                            (50, 50, 50), 1, cv2.LINE_AA)
+                
+                # Vertical grid lines
+                for i in range(1, 5):  # Draw 4 vertical grid lines
+                    grid_x = plot_x + int(i * plot_w / 5)
+                    cv2.line(control_panel, (grid_x, plot_y), (grid_x, plot_y + plot_h),
+                            (50, 50, 50), 1, cv2.LINE_AA)
+                
+                # Draw the RMS trend line with thicker, brighter line
+                for i in range(1, len(self.processor.rms_values)):
+                    y1 = plot_y + plot_h - int((self.processor.rms_values[i-1] / self.processor.max_rms) * (plot_h - 10))
+                    y2 = plot_y + plot_h - int((self.processor.rms_values[i] / self.processor.max_rms) * (plot_h - 10))
+                    x1 = plot_x + int((i-1) * plot_w / max(1, len(self.processor.rms_values)-1))
+                    x2 = plot_x + int(i * plot_w / max(1, len(self.processor.rms_values)-1))
+
+                    # Clip coordinates to be within the plot area bounds
+                    y1 = max(plot_y, min(plot_y + plot_h, y1))
+                    y2 = max(plot_y, min(plot_y + plot_h, y2))
+                    x1 = max(plot_x, min(plot_x + plot_w, x1))
+                    x2 = max(plot_x, min(plot_x + plot_w, x2))
+
+                    cv2.line(control_panel, (x1, y1), (x2, y2), (0, 180, 255), 2, cv2.LINE_AA)
+
+                # Draw horizontal line at current RMS value with improved visibility
+                current_y = plot_y + plot_h - int((camera_info['rms'] / self.processor.max_rms) * (plot_h - 10))
+                current_y = max(plot_y, min(plot_y + plot_h, current_y))
+                
+                # Draw dashed line for current value
+                dash_length = 5
+                for x in range(plot_x, plot_x + plot_w, dash_length * 2):
+                    x2 = min(x + dash_length, plot_x + plot_w)
+                    cv2.line(control_panel, (x, current_y), (x2, current_y), (50, 200, 50), 2, cv2.LINE_AA)
+
+                # Add scale with better formatting
+                cv2.putText(control_panel, "0", (plot_x - 20, plot_y + plot_h), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 180, 180), 1, cv2.LINE_AA)
+
+                # Add max scale
+                cv2.putText(control_panel, f"{self.processor.max_rms:.1f}", (plot_x - 20, plot_y + 10), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 180, 180), 1, cv2.LINE_AA)
+        
+        # End of Parameters tab content
+        elif self.active_tab == 1:  # Controls tab
+            # Controls section starts at the top of the content area
+            self.controls_section_y = self.tab_height + 50
+            
+            # Controls section header
+            cv2.putText(control_panel, "Controls", (20, self.controls_section_y - 10), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 140, 255), 1, cv2.LINE_AA)
+            
+            # Draw a separator line
+            cv2.line(control_panel, (20, self.controls_section_y), 
+                    (self.control_panel_width - 20, self.controls_section_y), (100, 100, 100), 1)
+    
+            # Draw buttons
+            for button in self.control_buttons:
+                self._draw_button(control_panel, button, is_control_panel=True)
 
         # Display the control panel
         cv2.imshow(self.control_panel_name, control_panel)
@@ -691,89 +855,12 @@ class CameraViewer:
             # Create a combined display with main image and possible Laplacian
             main_display = self._create_main_display(display_frame, processed_data)
             
-            # --- Draw Info Overlay on Main Display (Top-Left) ---
-            info_x = 15
-            info_y_start = 30
-            line_height = 22  # Slightly smaller line height for overlay
-            text_color = (230, 230, 230)
-            font_scale = 0.5
-            thickness = 1
-
-            # Optional: Add a semi-transparent background for readability
-            bg_h = (4 * line_height) + 10  # Height for 4 lines + padding
-            if 'temperature' in camera_info and camera_info['temperature'] is not None:
-                bg_h += line_height  # Add space for temp if available
-            overlay = main_display.copy()
-            cv2.rectangle(overlay, (info_x - 5, info_y_start - line_height + 5),
-                          (info_x + 200, info_y_start + bg_h - line_height + 5),  # Adjust width as needed
-                          (0, 0, 0), -1)  # Black background
-            alpha = 0.4  # Transparency factor
-            main_display = cv2.addWeighted(overlay, alpha, main_display, 1 - alpha, 0)
-
-            # Draw Text
-            text_y = info_y_start
-            cv2.putText(main_display, f"Exposure: {camera_info['exposure']:.2f} ms", (info_x, text_y), 
-                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, text_color, thickness, cv2.LINE_AA)
-            text_y += line_height
-            cv2.putText(main_display, f"Gain: {camera_info['gain']:.1f}", (info_x, text_y), 
-                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, text_color, thickness, cv2.LINE_AA)
-            text_y += line_height
-            cv2.putText(main_display, f"FPS: {fps_info['display_fps']:.1f}", (info_x, text_y), 
-                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, text_color, thickness, cv2.LINE_AA)
-            text_y += line_height
-            if 'temperature' in camera_info and camera_info['temperature'] is not None:
-                cv2.putText(main_display, f"Temp: {camera_info['temperature']:.1f}°C", (info_x, text_y), 
-                            cv2.FONT_HERSHEY_SIMPLEX, font_scale, text_color, thickness, cv2.LINE_AA)
-                text_y += line_height
+            # Camera parameters overlay has been moved to the control panel
+            # Only keep focus score in the main window if needed
+            # No overlay in the main window as all info is now in the control panel
             
-            # Focus Score with highlight
-            focus_text = f"Focus Score: {camera_info['rms']:.2f}"
-            cv2.putText(main_display, focus_text, (info_x, text_y), 
-                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, (50, 200, 50), thickness, cv2.LINE_AA)
-            text_y += line_height + 5
-            
-            # Add mini focus trend graph on main display
-            if self.processor.rms_values and len(self.processor.rms_values) > 1:
-                # Draw mini RMS plot
-                mini_plot_w = 180
-                mini_plot_h = 40
-                mini_plot_x = info_x
-                mini_plot_y = text_y
-                
-                # Draw plot background
-                cv2.rectangle(overlay, (mini_plot_x, mini_plot_y), 
-                             (mini_plot_x + mini_plot_w, mini_plot_y + mini_plot_h), (0, 0, 0), -1)
-                main_display = cv2.addWeighted(overlay, alpha, main_display, 1 - alpha, 0)
-                
-                # Draw border
-                cv2.rectangle(main_display, (mini_plot_x, mini_plot_y), 
-                             (mini_plot_x + mini_plot_w, mini_plot_y + mini_plot_h), (80, 80, 80), 1)
-                
-                # Draw the trend line
-                values_to_plot = self.processor.rms_values[-30:] if len(self.processor.rms_values) > 30 else self.processor.rms_values
-                max_val = max(values_to_plot) if values_to_plot else 1.0
-                
-                for i in range(1, len(values_to_plot)):
-                    y1 = mini_plot_y + mini_plot_h - int((values_to_plot[i-1] / max_val) * (mini_plot_h - 4))
-                    y2 = mini_plot_y + mini_plot_h - int((values_to_plot[i] / max_val) * (mini_plot_h - 4))
-                    x1 = mini_plot_x + int((i-1) * mini_plot_w / max(1, len(values_to_plot)-1))
-                    x2 = mini_plot_x + int(i * mini_plot_w / max(1, len(values_to_plot)-1))
-                    
-                    # Clip coordinates
-                    y1 = max(mini_plot_y, min(mini_plot_y + mini_plot_h, y1))
-                    y2 = max(mini_plot_y, min(mini_plot_y + mini_plot_h, y2))
-                    x1 = max(mini_plot_x, min(mini_plot_x + mini_plot_w, x1))
-                    x2 = max(mini_plot_x, min(mini_plot_x + mini_plot_w, x2))
-                    
-                    cv2.line(main_display, (x1, y1), (x2, y2), (50, 200, 50), 1, cv2.LINE_AA)
-                
-                # Draw current value marker
-                current_y = mini_plot_y + mini_plot_h - int((camera_info['rms'] / max_val) * (mini_plot_h - 4))
-                current_y = max(mini_plot_y, min(mini_plot_y + mini_plot_h, current_y))
-                
-                # Draw horizontal line at current value
-                cv2.line(main_display, (mini_plot_x, current_y), 
-                         (mini_plot_x + mini_plot_w, current_y), (0, 140, 255), 1, cv2.LINE_AA)
+            # Focus score moved to control panel
+            # --- End Info Overlay ---
             # --- End Info Overlay ---
             
             # Add GUI buttons on top of the main display
@@ -906,8 +993,18 @@ class CameraViewer:
             
             # Simple horizontal stack
             combined_display = np.hstack((main_frame, laplacian_resized))
+            
+            # Dynamically adjust window size for combined display
+            win_width = min(self.screen_width - 400, w * 2)  # Account for control panel width
+            win_height = min(self.screen_height - 100, h)
+            cv2.resizeWindow(self.window_name, win_width, win_height)
         else:
             combined_display = main_frame
+            
+            # Restore original window size when Laplacian is hidden
+            win_width = min(self.screen_width - 400, w)  # Account for control panel width
+            win_height = min(self.screen_height - 100, h)
+            cv2.resizeWindow(self.window_name, win_width, win_height)
         
         return combined_display
     
