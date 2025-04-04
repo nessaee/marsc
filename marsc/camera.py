@@ -2,6 +2,10 @@
 
 import os
 import sys
+import logging
+
+# Configure logger
+logger = logging.getLogger('marsc.camera')
 
 # Ensure the pyPOACamera module is available
 script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -13,8 +17,8 @@ try:
     import time
     from pyPOACamera import *
 except ImportError:
-    print("Error: pyPOACamera.py module not found.")
-    print("Make sure pyPOACamera.py is in the same directory as this script.")
+    logger.critical("Error: pyPOACamera.py module not found.")
+    logger.critical("Make sure pyPOACamera.py is in the same directory as this script.")
     sys.exit(1)
 
 class MarsCamera:
@@ -213,12 +217,17 @@ class MarsCamera:
     def set_exposure(self, exposure_ms):
         """Set exposure in milliseconds"""
         if not self.connected:
+            logger.warning("Cannot set exposure: camera not connected")
             return False
         
+        # Convert from milliseconds to microseconds
         exposure_us = int(exposure_ms * 1000)
+        logger.debug(f"Setting exposure to {exposure_ms:.2f}ms ({exposure_us}µs)")
+        
         status = SetExp(self.camera_id, exposure_us, False)
         if status != POAErrors.POA_OK:
-            print(f"Error setting exposure: {GetErrorString(status)}")
+            error_msg = GetErrorString(status)
+            logger.error(f"Error setting exposure: {error_msg}")
             return False
         
         return True
@@ -362,32 +371,43 @@ class MarsCamera:
     
     def get_frame(self, timeout_ms=500):
         """Get a frame from the camera using direct image acquisition"""
-        if not self.connected or not self.streaming:
+        if not self.connected:
+            logger.warning("Cannot get frame: camera not connected")
+            return None
+            
+        if not self.streaming:
+            logger.warning("Cannot get frame: camera not streaming")
             return None
         
         # Get frame size and format info
+        logger.debug("Getting image size and format")
         status, width, height = GetImageSize(self.camera_id)
         if status != POAErrors.POA_OK:
-            print(f"Error getting image size: {GetErrorString(status)}")
+            error_msg = GetErrorString(status)
+            logger.error(f"Error getting image size: {error_msg}")
             return None
         
         status, img_format = GetImageFormat(self.camera_id)
         if status != POAErrors.POA_OK:
-            print(f"Error getting image format: {GetErrorString(status)}")
+            error_msg = GetErrorString(status)
+            logger.error(f"Error getting image format: {error_msg}")
             return None
         
         # Calculate buffer size and prepare buffer
         img_size = ImageCalcSize(height, width, img_format)
         buf_array = np.zeros(img_size, dtype=np.uint8)
+        logger.debug(f"Prepared buffer for {width}x{height} image, size: {img_size} bytes")
         
         # Check if image is ready before retrieving it
         status, is_ready = ImageReady(self.camera_id)
         if status != POAErrors.POA_OK:
-            print(f"Error checking if image is ready: {GetErrorString(status)}")
+            error_msg = GetErrorString(status)
+            logger.error(f"Error checking if image is ready: {error_msg}")
             return None
             
         if not is_ready:
-            # If not ready within timeout, return None
+            # If not ready within timeout, wait for it
+            logger.debug(f"Image not ready, waiting up to {timeout_ms}ms")
             start_time = time.time()
             while not is_ready and (time.time() - start_time) * 1000 < timeout_ms:
                 status, is_ready = ImageReady(self.camera_id)
@@ -396,20 +416,24 @@ class MarsCamera:
                 time.sleep(0.001)  # Small sleep to prevent CPU hogging
                 
             if not is_ready:
-                print("Timeout waiting for image to be ready")
+                logger.warning("Timeout waiting for image to be ready")
                 return None
         
         # Get image data into buffer
+        logger.debug("Getting image data")
         status = GetImageData(self.camera_id, buf_array, timeout_ms)
         if status != POAErrors.POA_OK:
-            print(f"Error getting image data: {GetErrorString(status)}")
+            error_msg = GetErrorString(status)
+            logger.error(f"Error getting image data: {error_msg}")
             return None
             
         # Convert buffer to image
+        logger.debug("Converting buffer to image")
         img = ImageDataConvert(buf_array, height, width, img_format)
         
         # Handle different image formats
         if len(img.shape) == 3 and img.shape[2] == 1:
             img = img.reshape((img.shape[0], img.shape[1]))
             
+        logger.debug(f"Frame acquired: shape={img.shape}, dtype={img.dtype}")
         return img
