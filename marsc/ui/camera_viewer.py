@@ -23,7 +23,7 @@ class CameraViewer:
         self.window_name = window_name
         self.running = False
         self.show_laplacian = True  # Flag to show Laplacian view
-        self.control_panel_width = 300  # Width of side control panel
+        self.control_panel_width = 350  # Width of side control panel
         
         # Get screen dimensions
         self.detect_screen_size()
@@ -31,19 +31,19 @@ class CameraViewer:
         # Setup main display window with WINDOW_NORMAL to allow manual resizing
         cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
         
-        # Set initial window size proportional to screen size (75% of screen)
-        win_width = min(1920, int(self.screen_width * 0.75))
-        win_height = min(1080, int(self.screen_height * 0.75))
+        # Set initial window size proportional to screen size (70% of screen)
+        win_width = min(1920, int(self.screen_width * 0.7))
+        win_height = min(1080, int(self.screen_height * 0.7))
         cv2.resizeWindow(self.window_name, win_width, win_height)
-        
+
         # Create control panel window
         self.control_panel_name = "Control Panel"
         cv2.namedWindow(self.control_panel_name, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(self.control_panel_name, self.control_panel_width, 600)
-        
+        cv2.resizeWindow(self.control_panel_name, self.control_panel_width, 700)
+
         # Position the control panel window to the right of the main window
-        cv2.moveWindow(self.control_panel_name, win_width + 30, 50)
-        
+        cv2.moveWindow(self.control_panel_name, win_width + 50, 50)
+
         # Current settings for interactive control
         self.current_exposure = None  # Will be set in start()
         self.current_gain = None      # Will be set in start()
@@ -71,15 +71,15 @@ class CameraViewer:
         self.control_mouse_y = 0
         self.buttons = []  # List to store buttons for main window
         self.control_buttons = []  # List to store buttons for control panel
-        self.show_help_menu = False  # Toggle for help menu display
-        
+        self.show_help_menu = False # Toggle for help menu display
+
         # Create button images and cache
         self.button_cache = {}
         
         # Set up mouse callbacks for button interaction
         cv2.setMouseCallback(self.window_name, self._mouse_callback)
         cv2.setMouseCallback(self.control_panel_name, self._control_mouse_callback)
-    
+
     def detect_screen_size(self):
         """Detect screen resolution"""
         try:
@@ -125,7 +125,7 @@ class CameraViewer:
         """Handle mouse events for control panel GUI interaction"""
         self.control_mouse_x = x
         self.control_mouse_y = y
-        
+
         if event == cv2.EVENT_LBUTTONDOWN:
             # Check if any control panel button was clicked
             for button in self.control_buttons:
@@ -134,7 +134,7 @@ class CameraViewer:
                     if button['action'] is not None:
                         button['action']()
                     break
-    
+
     def _is_point_in_rect(self, x, y, rect):
         """Check if point (x,y) is inside rectangle (x, y, width, height)"""
         return (rect[0] <= x <= rect[0] + rect[2] and 
@@ -193,9 +193,21 @@ class CameraViewer:
         
         # Display tooltip on hover if available
         if button['hover'] and button['tooltip']:
-            tooltip_y = y + h + 15
-            cv2.putText(img, button['tooltip'], (x, tooltip_y), cv2.FONT_HERSHEY_SIMPLEX,
-                      0.4, (200, 200, 200), 1, cv2.LINE_AA)
+            # Draw tooltip with background for better readability
+            tooltip_y = y + h + 20
+            tooltip_text = button['tooltip']
+            tooltip_size = cv2.getTextSize(tooltip_text, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)[0]
+            
+            # Draw background
+            tooltip_padding = 5
+            cv2.rectangle(img, 
+                        (x - tooltip_padding, tooltip_y - tooltip_size[1] - tooltip_padding),
+                        (x + tooltip_size[0] + tooltip_padding, tooltip_y + tooltip_padding),
+                        (40, 40, 40), -1)
+            
+            # Draw text
+            cv2.putText(img, tooltip_text, (x, tooltip_y), cv2.FONT_HERSHEY_SIMPLEX,
+                      0.4, (220, 220, 220), 1, cv2.LINE_AA)
     
     def _exposure_callback(self, value):
         # Trackbar returns int 0-1000, convert to exposure in ms (0.1ms - 5000ms)
@@ -204,6 +216,7 @@ class CameraViewer:
             value = 1  # Prevent log(0)
             
         # Map 1-1000 to 0.1-5000ms (logarithmic)
+        # Adjusted for better representation - smoother scale with more precision at lower values
         exp_ms = 0.1 * (10 ** (3 * value / 1000))
         self.current_exposure = exp_ms
         self.camera.set_exposure(exp_ms)
@@ -224,7 +237,8 @@ class CameraViewer:
             exp_trackbar = int(1000 * np.log10(self.current_exposure / 0.1) / 3)
             exp_trackbar = max(0, min(1000, exp_trackbar))
             
-        cv2.createTrackbar("Exposure", self.control_panel_name, 
+        # Create exposure trackbar with improved scale labels
+        cv2.createTrackbar("Exposure (ms)", self.control_panel_name, 
                          exp_trackbar, 1000, self._exposure_callback)
         
         # For gain, direct mapping 0-100
@@ -239,47 +253,57 @@ class CameraViewer:
         # Button dimensions
         button_height = 30
         button_width = self.control_panel_width - 40
-        button_spacing = 10
-        start_y = 150  # Start below trackbars
+        button_spacing = 25  # Increased vertical spacing
+        start_y = 180  # Start below trackbars with more space
         start_x = 20
         
-        # Create buttons with actions
+        # Create buttons with actions in sections
+        
+        # Image control section
         self._create_button("Save Image", start_x, start_y, button_width, button_height, 
                           action=self._save_image, tooltip="Save current image to disk", panel="control")
         
-        self._create_button("Toggle Laplacian", start_x, start_y + button_height + button_spacing, 
-                          button_width, button_height, action=self._toggle_laplacian, 
-                          active=self.show_laplacian, tooltip="Show/hide Laplacian view", panel="control")
+        # Display section - add a bit more spacing between sections
+        display_y = start_y + button_height + button_spacing + 10
         
-        self._create_button("Display Mode", start_x, start_y + 2*(button_height + button_spacing), 
+        self._create_button("Toggle Laplacian", start_x, display_y, button_width, button_height, 
+                          action=self._toggle_laplacian, active=self.show_laplacian, 
+                          tooltip="Show/hide Laplacian edge detection view", panel="control")
+        
+        self._create_button("Display Mode", start_x, display_y + (button_height + button_spacing), 
                           button_width, button_height, action=self._cycle_display_mode, 
                           tooltip="Change image display mode", panel="control")
         
-        self._create_button("Contrast Mode", start_x, start_y + 3*(button_height + button_spacing), 
+        self._create_button("Contrast Mode", start_x, display_y + 2*(button_height + button_spacing), 
                           button_width, button_height, action=self._cycle_contrast_mode,
                           tooltip="Change contrast enhancement mode", panel="control")
         
-        self._create_button("Grid Mode", start_x, start_y + 4*(button_height + button_spacing), 
+        self._create_button("Grid Mode", start_x, display_y + 3*(button_height + button_spacing), 
                           button_width, button_height, action=self._cycle_grid_mode,
                           tooltip="Change grid overlay mode", panel="control")
         
-        self._create_button("RMS Plot", start_x, start_y + 5*(button_height + button_spacing), 
-                          button_width, button_height, action=self._toggle_rms_plot,
-                          active=self.processor.show_rms_plot, tooltip="Show/hide focus measurement plot", panel="control")
-        
-        self._create_button("Reset RMS", start_x, start_y + 6*(button_height + button_spacing), 
-                          button_width, button_height, action=self._reset_rms_plot,
-                          tooltip="Reset RMS plot scaling", panel="control")
-        
-        self._create_button("Color Mode", start_x, start_y + 7*(button_height + button_spacing), 
+        self._create_button("Color Mode", start_x, display_y + 4*(button_height + button_spacing), 
                           button_width, button_height, action=self._toggle_color_mode,
                           tooltip="Toggle between color and grayscale", panel="control")
         
-        self._create_button("Help", start_x, start_y + 8*(button_height + button_spacing), 
-                          button_width, button_height, action=self._toggle_help_menu,
-                          tooltip="Show help information", panel="control")
+        # Focus measurement section
+        focus_y = display_y + 5*(button_height + button_spacing) + 20
         
-        self._create_button("Exit", start_x, start_y + 9*(button_height + button_spacing), 
+        self._create_button("RMS Plot", start_x, focus_y, button_width, button_height, 
+                          action=self._toggle_rms_plot, active=self.processor.show_rms_plot, 
+                          tooltip="Show/hide focus measurement plot", panel="control")
+        
+        self._create_button("Reset RMS", start_x, focus_y + (button_height + button_spacing), 
+                          button_width, button_height, action=self._reset_rms_plot,
+                          tooltip="Reset RMS plot scaling", panel="control")
+        
+        # Application control section
+        app_y = focus_y + 2*(button_height + button_spacing) + 20
+        
+        self._create_button("Help", start_x, app_y, button_width, button_height, 
+                          action=self._toggle_help_menu, tooltip="Show help information", panel="control")
+        
+        self._create_button("Exit", start_x, app_y + (button_height + button_spacing), 
                           button_width, button_height, action=self._exit_program,
                           tooltip="Exit the application", panel="control")
     
@@ -289,11 +313,11 @@ class CameraViewer:
         
         # Button dimensions - smaller for main window to be unobtrusive
         button_height = 30
-        button_width = 120
-        button_spacing = 10
+        button_width = 110
+        button_spacing = 25  # Increased vertical spacing
         
         # Position at the top of the window
-        start_y = 20
+        start_y = 15
         
         # Create a few essential buttons on main window
         # Space them evenly across the top
@@ -402,7 +426,7 @@ class CameraViewer:
         # Create semi-transparent dark background
         cv2.rectangle(overlay, (popup_x, popup_y), 
                     (popup_x + popup_w, popup_y + popup_h), 
-                    (30, 30, 35), -1)
+                    (30, 30, 35, 200), -1)
         
         # Add title
         title = "Mars Camera - Help Menu"
@@ -569,79 +593,32 @@ class CameraViewer:
     def _update_control_panel(self, camera_info, fps_info):
         """Update the control panel with current information"""
         # Create control panel image
-        control_panel = np.zeros((600, self.control_panel_width, 3), dtype=np.uint8)
+        control_panel = np.zeros((700, self.control_panel_width, 3), dtype=np.uint8)
         control_panel[:] = self.PANEL_COLOR
-        
+
         # Add title
         cv2.putText(control_panel, "Mars Camera", (20, 30), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 140, 255), 2, cv2.LINE_AA)
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 140, 255), 2, cv2.LINE_AA)
         
-        # Add current values
-        y_start = 70
-        line_height = 25
+        # Control panel simplified - exposure scale and focus measurement moved to main window
+        # Just show the controls section
+        section_y = 80
         
-        # Camera info
-        cv2.putText(control_panel, f"Exposure: {camera_info['exposure']:.2f} ms", (20, y_start), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (220, 220, 220), 1, cv2.LINE_AA)
+        # Controls section header
+        cv2.putText(control_panel, "Controls", (20, section_y - 10), 
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 140, 255), 1, cv2.LINE_AA)
         
-        cv2.putText(control_panel, f"Gain: {camera_info['gain']:.1f}", (20, y_start + line_height), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (220, 220, 220), 1, cv2.LINE_AA)
-        
-        cv2.putText(control_panel, f"Resolution: {camera_info['resolution']}", (20, y_start + 2*line_height), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (220, 220, 220), 1, cv2.LINE_AA)
-        
-        # Performance info
-        perf_y = y_start + 3*line_height
-        cv2.putText(control_panel, f"Display FPS: {fps_info['display_fps']:.1f}", (20, perf_y), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (220, 220, 220), 1, cv2.LINE_AA)
-        
-        cv2.putText(control_panel, f"Camera FPS: {fps_info['camera_fps']:.1f}", (20, perf_y + line_height), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (220, 220, 220), 1, cv2.LINE_AA)
-        
-        # Add temperature if available
-        if 'temperature' in camera_info and camera_info['temperature'] is not None:
-            cv2.putText(control_panel, f"Temp: {camera_info['temperature']:.1f}°C", (20, perf_y + 2*line_height), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (220, 220, 220), 1, cv2.LINE_AA)
-        
-        # Focus info
-        focus_y = perf_y + 3*line_height
-        cv2.putText(control_panel, f"Focus score: {camera_info['rms']:.2f}", (20, focus_y), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (220, 220, 220), 1, cv2.LINE_AA)
-        
-        # Draw RMS plot in control panel
-        plot_y = focus_y + 20
-        plot_h = 80
-        plot_w = self.control_panel_width - 40
-        plot_x = 20
-        
-        # Draw plot background
-        cv2.rectangle(control_panel, (plot_x, plot_y), (plot_x + plot_w, plot_y + plot_h), (30, 30, 30), -1)
-        cv2.rectangle(control_panel, (plot_x, plot_y), (plot_x + plot_w, plot_y + plot_h), (70, 70, 70), 1)
-        
-        # Draw RMS trend if we have values
-        if self.processor.rms_values and len(self.processor.rms_values) > 1:
-            for i in range(1, len(self.processor.rms_values)):
-                y1 = plot_y + plot_h - int((self.processor.rms_values[i-1] / self.processor.max_rms) * (plot_h - 10))
-                y2 = plot_y + plot_h - int((self.processor.rms_values[i] / self.processor.max_rms) * (plot_h - 10))
-                y1 = max(plot_y, min(plot_y + plot_h, y1))
-                y2 = max(plot_y, min(plot_y + plot_h, y2))
-                x1 = plot_x + int((i-1) * plot_w / max(1, len(self.processor.rms_values)-1))
-                x2 = plot_x + int(i * plot_w / max(1, len(self.processor.rms_values)-1))
-                cv2.line(control_panel, (x1, y1), (x2, y2), (0, 140, 255), 1, cv2.LINE_AA)
-            
-            # Draw horizontal line at current RMS value
-            current_y = plot_y + plot_h - int((camera_info['rms'] / self.processor.max_rms) * (plot_h - 10))
-            current_y = max(plot_y, min(plot_y + plot_h, current_y))
-            cv2.line(control_panel, (plot_x, current_y), (plot_x + plot_w, current_y), 
-                    (50, 200, 50), 1, cv2.LINE_AA)
-        
+        # Draw a separator line
+        cv2.line(control_panel, (20, section_y), 
+                (self.control_panel_width - 20, section_y), (100, 100, 100), 1)
+
         # Draw buttons
         for button in self.control_buttons:
             self._draw_button(control_panel, button, is_control_panel=True)
-        
+
         # Display the control panel
         cv2.imshow(self.control_panel_name, control_panel)
-    
+
     def run(self, save_dir="."):
         """Main processing and display loop"""
         if not self.running:
@@ -709,33 +686,117 @@ class CameraViewer:
             
             # Add info overlay to frame (with minimal info since we have dedicated control panel)
             # Use modified version with minimal overlay
-            display_frame = self._add_minimal_overlay(
-                processed_data['display'], camera_info, fps_info)
+            display_frame = self._add_minimal_overlay(processed_data['display'], camera_info, fps_info)
             
             # Create a combined display with main image and possible Laplacian
             main_display = self._create_main_display(display_frame, processed_data)
             
+            # --- Draw Info Overlay on Main Display (Top-Left) ---
+            info_x = 15
+            info_y_start = 30
+            line_height = 22  # Slightly smaller line height for overlay
+            text_color = (230, 230, 230)
+            font_scale = 0.5
+            thickness = 1
+
+            # Optional: Add a semi-transparent background for readability
+            bg_h = (4 * line_height) + 10  # Height for 4 lines + padding
+            if 'temperature' in camera_info and camera_info['temperature'] is not None:
+                bg_h += line_height  # Add space for temp if available
+            overlay = main_display.copy()
+            cv2.rectangle(overlay, (info_x - 5, info_y_start - line_height + 5),
+                          (info_x + 200, info_y_start + bg_h - line_height + 5),  # Adjust width as needed
+                          (0, 0, 0), -1)  # Black background
+            alpha = 0.4  # Transparency factor
+            main_display = cv2.addWeighted(overlay, alpha, main_display, 1 - alpha, 0)
+
+            # Draw Text
+            text_y = info_y_start
+            cv2.putText(main_display, f"Exposure: {camera_info['exposure']:.2f} ms", (info_x, text_y), 
+                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, text_color, thickness, cv2.LINE_AA)
+            text_y += line_height
+            cv2.putText(main_display, f"Gain: {camera_info['gain']:.1f}", (info_x, text_y), 
+                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, text_color, thickness, cv2.LINE_AA)
+            text_y += line_height
+            cv2.putText(main_display, f"FPS: {fps_info['display_fps']:.1f}", (info_x, text_y), 
+                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, text_color, thickness, cv2.LINE_AA)
+            text_y += line_height
+            if 'temperature' in camera_info and camera_info['temperature'] is not None:
+                cv2.putText(main_display, f"Temp: {camera_info['temperature']:.1f}°C", (info_x, text_y), 
+                            cv2.FONT_HERSHEY_SIMPLEX, font_scale, text_color, thickness, cv2.LINE_AA)
+                text_y += line_height
+            
+            # Focus Score with highlight
+            focus_text = f"Focus Score: {camera_info['rms']:.2f}"
+            cv2.putText(main_display, focus_text, (info_x, text_y), 
+                        cv2.FONT_HERSHEY_SIMPLEX, font_scale, (50, 200, 50), thickness, cv2.LINE_AA)
+            text_y += line_height + 5
+            
+            # Add mini focus trend graph on main display
+            if self.processor.rms_values and len(self.processor.rms_values) > 1:
+                # Draw mini RMS plot
+                mini_plot_w = 180
+                mini_plot_h = 40
+                mini_plot_x = info_x
+                mini_plot_y = text_y
+                
+                # Draw plot background
+                cv2.rectangle(overlay, (mini_plot_x, mini_plot_y), 
+                             (mini_plot_x + mini_plot_w, mini_plot_y + mini_plot_h), (0, 0, 0), -1)
+                main_display = cv2.addWeighted(overlay, alpha, main_display, 1 - alpha, 0)
+                
+                # Draw border
+                cv2.rectangle(main_display, (mini_plot_x, mini_plot_y), 
+                             (mini_plot_x + mini_plot_w, mini_plot_y + mini_plot_h), (80, 80, 80), 1)
+                
+                # Draw the trend line
+                values_to_plot = self.processor.rms_values[-30:] if len(self.processor.rms_values) > 30 else self.processor.rms_values
+                max_val = max(values_to_plot) if values_to_plot else 1.0
+                
+                for i in range(1, len(values_to_plot)):
+                    y1 = mini_plot_y + mini_plot_h - int((values_to_plot[i-1] / max_val) * (mini_plot_h - 4))
+                    y2 = mini_plot_y + mini_plot_h - int((values_to_plot[i] / max_val) * (mini_plot_h - 4))
+                    x1 = mini_plot_x + int((i-1) * mini_plot_w / max(1, len(values_to_plot)-1))
+                    x2 = mini_plot_x + int(i * mini_plot_w / max(1, len(values_to_plot)-1))
+                    
+                    # Clip coordinates
+                    y1 = max(mini_plot_y, min(mini_plot_y + mini_plot_h, y1))
+                    y2 = max(mini_plot_y, min(mini_plot_y + mini_plot_h, y2))
+                    x1 = max(mini_plot_x, min(mini_plot_x + mini_plot_w, x1))
+                    x2 = max(mini_plot_x, min(mini_plot_x + mini_plot_w, x2))
+                    
+                    cv2.line(main_display, (x1, y1), (x2, y2), (50, 200, 50), 1, cv2.LINE_AA)
+                
+                # Draw current value marker
+                current_y = mini_plot_y + mini_plot_h - int((camera_info['rms'] / max_val) * (mini_plot_h - 4))
+                current_y = max(mini_plot_y, min(mini_plot_y + mini_plot_h, current_y))
+                
+                # Draw horizontal line at current value
+                cv2.line(main_display, (mini_plot_x, current_y), 
+                         (mini_plot_x + mini_plot_w, current_y), (0, 140, 255), 1, cv2.LINE_AA)
+            # --- End Info Overlay ---
+            
             # Add GUI buttons on top of the main display
             h, w = main_display.shape[:2]
-            
+
             # Update GUI button positions based on the current display size
-            if not self.buttons:
-                self._create_main_window_buttons(w, h)
-            
+            # if not self.buttons:
+            #     self._create_main_window_buttons(w, h)
+
             # Draw buttons on the main display
             for button in self.buttons:
                 self._draw_button(main_display, button)
-                
+
             # Draw help menu popup if shown
             if self.show_help_menu:
                 main_display = self._show_help_popup(main_display)
-            
+
             # Update the separate control panel window
             self._update_control_panel(camera_info, fps_info)
-            
+
             # Display the main window
             cv2.imshow(self.window_name, main_display)
-            
+
             # Check for key press and handle commands
             k = cv2.waitKey(1)
             self._handle_key_press(k)
@@ -782,18 +843,44 @@ class CameraViewer:
         elif k == ord('+') or k == ord('='):  # Increase exposure
             self.current_exposure = min(5000, self.current_exposure * 1.2)
             self.camera.set_exposure(self.current_exposure)
+            
+            # Update trackbar
+            if self.current_exposure <= 0.1:
+                exp_trackbar = 0
+            else:
+                exp_trackbar = int(1000 * np.log10(self.current_exposure / 0.1) / 3)
+                exp_trackbar = max(0, min(1000, exp_trackbar))
+            cv2.setTrackbarPos("Exposure (ms)", self.control_panel_name, exp_trackbar)
+
             print(f"Exposure increased to {self.current_exposure:.1f}ms")
         elif k == ord('-'):  # Decrease exposure
             self.current_exposure = max(0.1, self.current_exposure / 1.2)
             self.camera.set_exposure(self.current_exposure)
+            
+            # Update trackbar
+            if self.current_exposure <= 0.1:
+                exp_trackbar = 0
+            else:
+                exp_trackbar = int(1000 * np.log10(self.current_exposure / 0.1) / 3)
+                exp_trackbar = max(0, min(1000, exp_trackbar))
+            cv2.setTrackbarPos("Exposure (ms)", self.control_panel_name, exp_trackbar)
+
             print(f"Exposure decreased to {self.current_exposure:.1f}ms")
         elif k == ord('['):  # Decrease gain
             self.current_gain = max(0, self.current_gain - 1)
             self.camera.set_gain(self.current_gain)
+            
+            # Update trackbar
+            cv2.setTrackbarPos("Gain", self.control_panel_name, int(self.current_gain))
+
             print(f"Gain decreased to {self.current_gain:.1f}")
         elif k == ord(']'):  # Increase gain
             self.current_gain = min(100, self.current_gain + 1)
             self.camera.set_gain(self.current_gain)
+            
+            # Update trackbar
+            cv2.setTrackbarPos("Gain", self.control_panel_name, int(self.current_gain))
+
             print(f"Gain increased to {self.current_gain:.1f}")
         elif k == ord('l'):  # Toggle Laplacian view
             self._toggle_laplacian()
@@ -812,7 +899,6 @@ class CameraViewer:
             
             # Simple approach - resize both to match for clean side-by-side display
             # This prevents any artifacts from uneven scaling or padding
-            # Make both the same size as the main frame to maintain proportions
             h, w = main_frame.shape[:2]
             
             # Resize the Laplacian to match main frame exactly
